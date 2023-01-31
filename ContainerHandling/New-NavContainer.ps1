@@ -33,7 +33,7 @@
  .Parameter AuthenticationEmail
   AuthenticationEmail of the admin user
  .Parameter memoryLimit
-  Memory limit for the container (default is unlimited for process isolation and 8G for hyperv isolation containers)
+  Memory limit for the container (default is unlimited for process isolation and 8G for HyperV isolation containers)
  .Parameter sqlMemoryLimit
   Memory limit for the SQL inside the container (default is no limit)
   Value can be specified as 50%, 1.5G, 1500M
@@ -480,7 +480,7 @@ try {
     Write-Host "BcContainerHelper is version $BcContainerHelperVersion"
     if ($isAdministrator) {
         Write-Host "BcContainerHelper is running as administrator"
-        Write-Host "Hyper-V is $(Get-HypervState)"
+        Write-Host "HyperV is $(Get-HypervState)"
     }
     else {
         Write-Host "BcContainerHelper is not running as administrator"
@@ -489,7 +489,7 @@ try {
         Write-Host "BcContainerHelper is running inside a Container"
     }
     Write-Host "UsePsSession is $($bcContainerHelperConfig.UsePsSession)"
-    Write-Host "Host is $($os.Caption) - $hostOs"
+    Write-Host "Host is $($os.Caption) - $hostOsVersion"
 
     $dockerProcess = (Get-Process "dockerd" -ErrorAction Ignore)
     if (!($dockerProcess)) {
@@ -1202,15 +1202,6 @@ try {
             }
         }
 
-        if (($version.Major -eq 13 -or $version.Major -eq 14) -and $useGenericImageTagVersion -le [System.Version]"0.0.9.99") {
-            Write-Host "Patching navinstall.ps1 for 13.x and 14.x (issue #907)"
-            $myscripts += @("https://bcdocker.blob.core.windows.net/public/130-patch/navinstall.ps1")
-        }
-        elseif ($useGenericImageTagVersion -le [System.Version]"0.0.9.99") {
-            Write-Host "Patching navinstall.ps1 to stop the Service Tier for reconfiguration"
-            $myscripts += @( @{ "navinstall.ps1" = '. "c:\run\navinstall.ps1"; Stop-Service -Name $NavServiceName -WarningAction Ignore' } )
-        }
-
         $containerOsVersion = [Version]"$($inspect.Config.Labels.osversion)"
     
         if ("$containerOsVersion".StartsWith('10.0.14393.')) {
@@ -1266,6 +1257,10 @@ try {
         Write-Host "Patching start.ps1 due to issue #2130"
         $myscripts += @( "https://raw.githubusercontent.com/microsoft/nav-docker/master/generic/Run/start.ps1" )
     }
+    if ($version.Major -ge 22 -and $genericTag -le [System.Version]"1.0.2.13" -and $auth -eq "AAD") {
+        Write-Host "Patching SetupConfiguration.ps1 due to issue #2874"
+        $myscripts += @( "https://raw.githubusercontent.com/microsoft/nav-docker/master/generic/Run/210-new/SetupConfiguration.ps1" )
+    }
 
     if ($hostOsVersion -eq $containerOsVersion) {
         if ($isolation -eq "") {
@@ -1296,12 +1291,12 @@ try {
                 }
                 else {
                     $isolation = "process"
-                    Write-Host -ForegroundColor Yellow "WARNING: Host OS and Base Image Container OS doesn't match and Hyper-V is not installed. If you encounter issues, you could try to install Hyper-V."
+                    Write-Host -ForegroundColor Yellow "WARNING: Host OS and Base Image Container OS doesn't match and HyperV is not installed. If you encounter issues, you could try to install HyperV."
                 }
             }
             else {
                 $isolation = "hyperv"
-                Write-Host -ForegroundColor Yellow "WARNING: Host OS and Base Image Container OS doesn't match, defaulting to hyperv. If you do not have Hyper-V installed or you encounter issues, you could try to specify -isolation process"
+                Write-Host -ForegroundColor Yellow "WARNING: Host OS and Base Image Container OS doesn't match, defaulting to hyperv. If you do not have HyperV installed or you encounter issues, you could try to specify -isolation process"
             }
 
         }
@@ -1313,6 +1308,10 @@ try {
 
     if ($isolation -eq "process" -and !$isServerHost -and ($version.Major -lt 15 -or $genericTag -lt [Version]"1.0.2.4")) {
         Write-Host -ForegroundColor Yellow "WARNING: Using process isolation on Windows Desktop OS with generic image version prior to 1.0.2.4 or NAV/BC versions prior to 15.0, might require you to use HyperV isolation or disable Windows Defender while creating the container"
+    }
+
+    if ($isolation -eq "process" -and !$isServerHost -and $os.BuildNumber -eq 22621 -and $useSSL) {
+        Write-Host -ForegroundColor Red "WARNING: Using SSL when running Windows 11 with process isolation might not work due to a bug in Windows 11. Please use HyperV isolation or disable SSL."
     }
 
     AddTelemetryProperty -telemetryScope $telemetryScope -key "isolation" -value $isolation
@@ -1713,6 +1712,19 @@ Get-NavServerUser -serverInstance $ServerInstance -tenant default |? LicenseType
         ('# Invoke default behavior
           . (Join-Path $runPath $MyInvocation.MyCommand.Name)
         ') | Set-Content -Path "$myfolder\SetupVariables.ps1"
+    }
+
+    if ($version.Major -ge 22 -and $genericTag -le [System.Version]"1.0.2.13" -and "$imageName" -eq "") {
+        if (!(Test-Path -Path "$myfolder\HelperFunctions.ps1")) {
+            ('# Invoke default behavior
+              . (Join-Path $runPath $MyInvocation.MyCommand.Name)
+            ') | Set-Content -Path "$myfolder\HelperFunctions.ps1"
+        }
+        Write-Host "Patching container to install dotnet 6.0.13"
+        Download-File -source "https://bcartifacts.blob.core.windows.net/prerequisites/dotnet-hosting-6.0.13-win.exe" -destinationFile (Join-Path $myFolder "dotnet-win.exe")
+        ('
+if (Test-Path "c:\run\my\dotnet-win.exe") { Write-Host "Generic image is 1.0.2.13 or below, installing dotnet 6.0.13"; start-process -Wait -FilePath "c:\run\my\dotnet-win.exe" -ArgumentList /quiet; Remove-Item "c:\run\my\dotnet-win.exe" -Force }
+') | Add-Content -Path "$myfolder\HelperFunctions.ps1"
     }
 
     if ($updateHosts) {
