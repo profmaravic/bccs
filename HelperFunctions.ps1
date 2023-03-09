@@ -851,7 +851,11 @@ Function CreatePsTestToolFolder {
 
     Invoke-ScriptInBcContainer -containerName $containerName { Param([string] $myNewtonSoftDllPath, [string] $myClientDllPath)
         if (!(Test-Path $myNewtonSoftDllPath)) {
-            $newtonSoftDllPath = (Get-Item "C:\Program Files\Microsoft Dynamics NAV\*\Service\NewtonSoft.json.dll").FullName
+            $newtonSoftDllPath = "C:\Program Files\Microsoft Dynamics NAV\*\Service\Management\NewtonSoft.json.dll"
+            if (!(Test-Path $newtonSoftDllPath)) {
+                $newtonSoftDllPath = "C:\Program Files\Microsoft Dynamics NAV\*\Service\NewtonSoft.json.dll"
+            }
+            $newtonSoftDllPath = (Get-Item $newtonSoftDllPath).FullName
             Copy-Item -Path $newtonSoftDllPath -Destination $myNewtonSoftDllPath
         }
         if (!(Test-Path $myClientDllPath)) {
@@ -951,7 +955,7 @@ function DownloadFileLow {
     )
 
     if ($useTimeOutWebClient) {
-        Write-Host "Using WebClient"
+        Write-Host "Downloading using WebClient"
         $webClient = New-Object TimeoutWebClient -ArgumentList (1000*$timeout)
         $headers.Keys | ForEach-Object {
             $webClient.Headers.Add($_, $headers."$_")
@@ -971,7 +975,7 @@ function DownloadFileLow {
         }
     }
     else {
-        Write-Host "Using HttpClient"
+        Write-Host "Downloading using HttpClient"
         if ($useDefaultCredentials) {
             $handler = New-Object System.Net.Http.HttpClientHandler
             $handler.UseDefaultCredentials = $true
@@ -1007,4 +1011,72 @@ function DownloadFileLow {
             }
         }
     }
+}
+
+function GetAppInfo {
+    Param(
+        [string[]] $appFiles,
+        [string] $alcDllPath,
+        [switch] $cacheAppInfo
+    )
+
+    Start-Job -ScriptBlock { Param( [string[]] $appFiles, [string] $alcDllPath )
+        $assembliesAdded = $false
+        $packageStream = $null
+        $package = $null
+        try {
+            $appFiles | ForEach-Object {
+                $path = $_
+                $appInfoPath = "$_.json"
+                if ($cacheAppInfo -and (Test-Path -Path $appInfoPath)) {
+                    $appInfo = Get-Content -Path $appInfoPath | ConvertFrom-Json
+                }
+                else {
+                    if (!$assembliesAdded) {
+                        Add-Type -AssemblyName System.IO.Compression.FileSystem
+                        Add-Type -AssemblyName System.Text.Encoding
+                        Add-Type -Path (Join-Path $alcDllPath Newtonsoft.Json.dll)
+                        Add-Type -Path (Join-Path $alcDllPath System.Collections.Immutable.dll)
+                        Add-Type -Path (Join-Path $alcDllPath Microsoft.Dynamics.Nav.CodeAnalysis.dll)
+                        $assembliesAdded = $true
+                    }
+                    $packageStream = [System.IO.File]::OpenRead($path)
+                    $package = [Microsoft.Dynamics.Nav.CodeAnalysis.Packaging.NavAppPackageReader]::Create($PackageStream, $true)
+                    $manifest = $package.ReadNavAppManifest()
+                    $appInfo = @{
+                        "appId" = $manifest.AppId
+                        "publisher" = $manifest.AppPublisher
+                        "name" = $manifest.AppName
+                        "version" = "$($manifest.AppVersion)"
+                    }
+                    if ($cacheAppInfo) {
+                        $appInfo | ConvertTo-Json -Depth 99 | Set-Content -Path $appInfoPath -Encoding UTF8 -Force
+                    }
+                }
+                @{
+                    "appId" = $appInfo.appId
+                    "publisher" = $appInfo.publisher
+                    "name" = $appInfo.name
+                    "version" = [System.Version]$appInfo.version
+                }
+            }
+        }
+        catch [System.Reflection.ReflectionTypeLoadException] {
+            if ($_.Exception.LoaderExceptions) {
+                $_.Exception.LoaderExceptions | Select-Object -Property Message | Select-Object -Unique | ForEach-Object {
+                    Write-Host "LoaderException: $($_.Message)"
+                }
+            }
+            throw
+        }
+        finally {
+            if ($package) {
+                $package.Dispose()
+            }
+            if ($packageStream) {
+                $packageStream.Dispose()
+            }
+        }
+        
+    } -argumentList $appFiles, $alcDllPath | Wait-Job | Receive-Job
 }

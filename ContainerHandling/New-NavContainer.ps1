@@ -1261,6 +1261,10 @@ try {
         Write-Host "Patching SetupConfiguration.ps1 due to issue #2874"
         $myscripts += @( "https://raw.githubusercontent.com/microsoft/nav-docker/master/generic/Run/210-new/SetupConfiguration.ps1" )
     }
+    if ($version.Major -ge 22 -and $genericTag -le [System.Version]"1.0.2.13") {
+        Write-Host "Patching prompt.ps1 due to issue #2891"
+        $myScripts += @( "https://raw.githubusercontent.com/microsoft/nav-docker/master/generic/Run/Prompt.ps1" )
+    }
 
     if ($hostOsVersion -eq $containerOsVersion) {
         if ($isolation -eq "") {
@@ -1714,7 +1718,7 @@ Get-NavServerUser -serverInstance $ServerInstance -tenant default |? LicenseType
         ') | Set-Content -Path "$myfolder\SetupVariables.ps1"
     }
 
-    if ($version.Major -ge 22 -and $genericTag -le [System.Version]"1.0.2.13" -and "$imageName" -eq "") {
+    if ($version.Major -ge 22 -and $genericTag -le [System.Version]"1.0.2.13") {
         if (!(Test-Path -Path "$myfolder\HelperFunctions.ps1")) {
             ('# Invoke default behavior
               . (Join-Path $runPath $MyInvocation.MyCommand.Name)
